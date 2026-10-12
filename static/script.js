@@ -59,7 +59,9 @@ async function summarize() {
     const data = await resp.json();
 
     if (!resp.ok) {
-      throw new Error(data.error || `Server error ${resp.status}`);
+      // Flask returns {error}, FastAPI returns {detail} (a string, or a list for validation errors).
+      const detail = Array.isArray(data.detail) ? data.detail[0]?.msg : data.detail;
+      throw new Error(data.error || detail || `Server error ${resp.status}`);
     }
 
     currentSummary = data.summary;

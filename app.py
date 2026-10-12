@@ -1,35 +1,24 @@
-import re
-import torch
+"""Flask server for the fine-tuned T5 dialogue summarizer (served with Waitress).
+
+The FastAPI version with Pydantic validation and OpenAPI docs lives in api.py.
+"""
 import logging
-from flask import Flask, request, jsonify, render_template
+import os
+
+from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
-from transformers import T5Tokenizer, T5ForConditionalGeneration
-from waitress import serve
+
+from summarizer import ModelNotAvailableError, Summarizer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+MAX_INPUT_CHARS = 20_000
+
 app = Flask(__name__)
 CORS(app)
 
-# ── Load model once at startup ──────────────────────────────────────────────
-MODEL_PATH = "./saved_summary_model"
-
-print("Loading model…")
-tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
-model     = T5ForConditionalGeneration.from_pretrained(MODEL_PATH)
-device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-model.eval()
-print(f"Model ready on {device}")
-
-
-# ── Helper ───────────────────────────────────────────────────────────────────
-def clean_text(text: str) -> str:
-    text = re.sub(r"\r\n", " ", text)
-    text = re.sub(r"\s+",  " ", text)
-    text = re.sub(r"<.*?>", " ", text)
-    return text.strip().lower()
+summarizer = Summarizer()
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -40,47 +29,46 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "healthy", "device": str(device)})
+    return jsonify(
+        {
+            "status": "healthy" if summarizer.is_loaded else "loading",
+            "model_loaded": summarizer.is_loaded,
+            "device": summarizer.device,
+        }
+    )
 
 
 @app.route("/summarize", methods=["POST"])
 def summarize():
     data = request.get_json(silent=True)
-    if not data or "text" not in data:
-        return jsonify({"error": "Please provide a 'text' field in the request body."}), 400
+    if not isinstance(data, dict) or not isinstance(data.get("text"), str):
+        return jsonify({"error": "Please provide a 'text' string in the request body."}), 400
 
     raw_text = data["text"].strip()
     if not raw_text:
         return jsonify({"error": "Input text cannot be empty."}), 400
-
-    cleaned = clean_text(raw_text)
+    if len(raw_text) > MAX_INPUT_CHARS:
+        return jsonify({"error": f"Input text exceeds {MAX_INPUT_CHARS} characters."}), 400
 
     try:
-        inputs = tokenizer(
-            cleaned,
-            return_tensors="pt",
-            max_length=512,
-            truncation=True,
-            padding="max_length",
-        ).to(device)
-
-        with torch.no_grad():
-            output_ids = model.generate(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                max_length=150,
-                num_beams=4,
-                early_stopping=True,
-                no_repeat_ngram_size=3,
-            )
-
-        summary = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        return jsonify({"summary": summary})
-    except Exception as e:
-        logger.error(f"Inference error: {e}")
+        summary = summarizer.summarize(raw_text)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except ModelNotAvailableError as exc:
+        logger.error("Model unavailable: %s", exc)
+        return jsonify({"error": "Model is not available."}), 503
+    except Exception:
+        logger.exception("Inference failed")
         return jsonify({"error": "Internal server error during summarization."}), 500
+
+    return jsonify({"summary": summary})
 
 
 if __name__ == "__main__":
-    print("Serving with Waitress on http://127.0.0.1:5000")
-    serve(app, host="127.0.0.1", port=5000)
+    from waitress import serve
+
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "5000"))
+    summarizer.load()
+    logger.info("Serving with Waitress on http://%s:%d", host, port)
+    serve(app, host=host, port=port)

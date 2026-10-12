@@ -1,130 +1,138 @@
-# 📝 Text Summarization with Fine-Tuned T5 & Flask
+# Dialogue Summarization with Fine-Tuned T5
 
-An end-to-end Natural Language Processing (NLP) dialogue summarization system powered by a fine-tuned Google **T5 (Text-to-Text Transfer Transformer)** model, equipped with a modern web user interface and a production-ready REST API.
+[![tests](https://github.com/AnasMehfooz/Text-Summarization/actions/workflows/tests.yml/badge.svg)](https://github.com/AnasMehfooz/Text-Summarization/actions/workflows/tests.yml)
 
----
+Abstractive summarization of chat dialogues using **T5-small fine-tuned on SAMSum**, served through a **FastAPI** REST API (Pydantic validation, OpenAPI docs) or an equivalent **Flask + Waitress** server, with a small web UI. Runs on CUDA when available and falls back to CPU, where a summary takes about 0.5 s.
 
-## 🌟 Features
+```text
+Hannah: Hey, are you free this afternoon?
+Amanda: Yes, why?
+Hannah: Let's meet at the cafe around 4pm to work on our presentation.
+Amanda: Sounds great! See you then.
 
-- **Fine-Tuned Transformer**: Trained on the **SAMSum** dialogue dataset for coherent, abstractive summarization.
-- **Interactive Web Interface**: Clean HTML/CSS/JavaScript UI for real-time text input and instant summary generation.
-- **RESTful API**: Fast inference endpoint (`/summarize`) deployable anywhere with Waitress WSGI.
-- **VS Code Ready**: Pre-configured with `.vscode` debug launch configurations, recommended extensions, and environment settings.
-- **GPU Accelerated**: Automatic GPU acceleration when CUDA is available, with CPU fallback.
-
----
-
-## 📁 Project Structure
-
-```
-Text-Summarization/
-├── .vscode/
-│   ├── launch.json           # VS Code one-click debugging configurations
-│   ├── settings.json         # Workspace settings & exclusions
-│   └── extensions.json       # Recommended extensions (Python, Pylance, Jupyter)
-├── saved_summary_model/
-│   ├── config.json           # Model configuration
-│   ├── generation_config.json
-│   ├── tokenizer.json        # Tokenizer vocabulary
-│   └── tokenizer_config.json
-├── static/
-│   ├── style.css             # Frontend styling
-│   └── script.js             # Async API client for UI
-├── templates/
-│   └── index.html            # Web dashboard
-├── app.py                    # Flask server + Waitress WSGI runner
-├── train.py                  # Fine-tuning script with HuggingFace Trainer
-├── he.py                     # Training script (original)
-├── text_summarizer.ipynb     # Interactive Jupyter notebook walkthrough
-├── requirements.txt          # Project dependencies
-├── samsum-train.csv          # Training dataset
-├── samsum-validation.csv     # Validation dataset
-├── samsum-test.csv           # Test dataset
-└── README.md
+→ hannah and amanda will meet at the cafe around 4 pm to work on their presentation.
 ```
 
----
+## Architecture
 
-## 🚀 Getting Started in VS Code
+```text
+             ┌──────────── api.py  (FastAPI + Pydantic, uvicorn) ──┐
+web UI ──►   │                                                     ├──► summarizer.py ──► T5-small (saved_summary_model/)
+REST   ──►   └──────────── app.py  (Flask, Waitress)  ─────────────┘     clean_text · lazy, thread-safe load · beam search
+```
 
-### 1. Clone the Repository
+- **`summarizer.py`** – one place for preprocessing and inference. Applies the same `clean_text` as training, loads the model once (thread-safe, lazy), detects CUDA, and runs beam search (4 beams, no repeated 3-grams). torch/transformers are imported lazily so the web layers and tests start without them.
+- **`api.py`** – FastAPI app factory with typed request/response models, input limits, a lifespan hook that loads the model off the event loop, and a sync inference handler so generation runs in FastAPI's threadpool.
+- **`app.py`** – the original Flask server, now using the shared module.
+
+## Model and training
+
+| | |
+| --- | --- |
+| Base model | `t5-small` (60M parameters) |
+| Data | [SAMSum](https://huggingface.co/datasets/samsum): ~16k chat dialogues with human-written summaries |
+| Training subset | 4,000 dialogues (train), 500 (validation), sampled with `random_state=42` |
+| Setup | Hugging Face `Trainer`, 6 epochs, batch size 8, 500 warmup steps, weight decay 0.01 |
+| Input / output length | 512 / 150 tokens |
+
+Retrain with `python train.py`; weights are written to `saved_summary_model/`. `text_summarizer.ipynb` walks through the same steps interactively.
+
+## Quick start
+
+The model weights (~240 MB) are stored with **Git LFS**. Without `git lfs pull` you only get a pointer file, and the server returns a clear 503 error.
+
 ```bash
 git clone https://github.com/AnasMehfooz/Text-Summarization.git
 cd Text-Summarization
-```
+git lfs install && git lfs pull
 
-### 2. Set Up Virtual Environment
-```bash
-python -m venv .venv
-# On Windows:
-.venv\Scripts\activate
-# On macOS/Linux:
-source .venv/bin/activate
-```
-
-### 3. Install Dependencies
-```bash
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 4. Running the Web Application
-- **In VS Code**: Press `F5` or navigate to the **Run & Debug** panel and select **`Python: Flask Web App`**.
-- **Via Terminal**:
-  ```bash
-  python app.py
-  ```
-  Open your browser and navigate to `http://127.0.0.1:5000`.
+**FastAPI** (recommended)
 
----
+```bash
+uvicorn api:app --reload
+# UI:   http://127.0.0.1:8000
+# Docs: http://127.0.0.1:8000/docs
+```
 
-## 🏋️ Model Training
+**Flask**
 
-To retrain or fine-tune the T5 model on the SAMSum dataset:
-- **In VS Code**: Select **`Python: Train T5 Model`** in the Run & Debug menu.
-- **Via Terminal**:
-  ```bash
-  python train.py
-  ```
-The trained weights and tokenizer will be saved to `./saved_summary_model/`.
+```bash
+python app.py        # http://127.0.0.1:5000  (HOST / PORT env vars override)
+```
 
----
+**Docker** (CPU)
 
-## 🔌 API Reference
+```bash
+docker build -t t5-summarizer .
+docker run -p 8000:8000 t5-summarizer
+```
 
-### Health Check
-- **Endpoint**: `GET /health`
-- **Response**:
-  ```json
-  {
-    "status": "healthy",
-    "device": "cuda"
-  }
-  ```
+## API
 
-### Summarize Text
-- **Endpoint**: `POST /summarize`
-- **Headers**: `Content-Type: application/json`
-- **Request Body**:
-  ```json
-  {
-    "text": "Hannah: Hey, are you free this afternoon?\nAmanda: Yes, why?\nHannah: Let's meet at the cafe around 4pm to work on our presentation.\nAmanda: Sounds great! See you then."
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "summary": "hannah and amanda will meet at a cafe at 4pm to prepare their presentation."
-  }
-  ```
+### `POST /summarize`
 
----
+```bash
+curl -X POST http://127.0.0.1:8000/summarize \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Tom: Are we still on for 5?\nAnna: Yes, see you at the gym.", "num_beams": 4}'
+```
 
-## 📊 Dataset
+| Field | Type | Default | Constraints |
+| --- | --- | --- | --- |
+| `text` | string | required | 1–20,000 chars, not blank |
+| `max_length` | int | 150 | 10–300 tokens (FastAPI only) |
+| `num_beams` | int | 4 | 1–8 (FastAPI only) |
 
-Trained on the **SAMSum Corpus**, containing ~16k realistic chat dialogues with human-annotated summaries.
+FastAPI response:
 
----
+```json
+{ "summary": "tom and anna are still on for 5 at the gym.", "input_words": 14, "summary_words": 11 }
+```
 
-## 👤 Author
-**Anas Mehfooz**
-- GitHub: [@AnasMehfooz](https://github.com/AnasMehfooz)
+The Flask server returns `{"summary": "..."}`.
+
+| Status | Meaning |
+| --- | --- |
+| 200 | Summary generated |
+| 400 | Text is empty after cleaning (e.g. only HTML tags) |
+| 422 | Request failed validation (FastAPI); Flask returns 400 |
+| 503 | Model weights missing |
+| 500 | Inference error (details are logged, not returned) |
+
+### `GET /health`
+
+```json
+{ "status": "healthy", "model_loaded": true, "device": "cuda" }
+```
+
+## Tests
+
+The suite mocks the model, so it runs in about a second without torch or the weights. CI runs it on Python 3.11 and 3.12.
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+## Project structure
+
+```text
+├── api.py                  FastAPI server
+├── app.py                  Flask server (Waitress)
+├── summarizer.py           Shared preprocessing and inference
+├── train.py                Fine-tuning script (he.py: original version)
+├── text_summarizer.ipynb   Notebook walkthrough
+├── saved_summary_model/    Fine-tuned weights (Git LFS) and tokenizer
+├── templates/, static/     Web UI
+├── tests/                  pytest suite
+├── Dockerfile
+└── samsum-*.csv            Dataset splits
+```
+
+## Author
+
+**Anas Mehfooz** · [GitHub](https://github.com/AnasMehfooz) · [LinkedIn](https://www.linkedin.com/in/anas-mehfooz-670501302/)
