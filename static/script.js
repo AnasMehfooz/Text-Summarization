@@ -142,7 +142,9 @@ async function summarize() {
 
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      showError('Summarization failed', data.error || `The server responded with error ${resp.status}.`);
+      // Flask returns {error}, FastAPI returns {detail} (a string, or a list for validation errors).
+      const detail = Array.isArray(data.detail) ? data.detail[0]?.msg : data.detail;
+      showError('Summarization failed', data.error || detail || `The server responded with error ${resp.status}.`);
       return;
     }
 
@@ -181,7 +183,11 @@ async function checkHealth() {
     const resp = await fetch('/health', { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) throw new Error();
-    setStatus('ready', `Ready · ${data.device === 'cuda' ? 'GPU' : 'CPU'}`);
+    if (data.status === 'loading') {
+      setStatus('checking', 'Loading model…');
+      return;
+    }
+    setStatus('ready', `Ready · ${String(data.device).startsWith('cuda') ? 'GPU' : 'CPU'}`);
   } catch {
     setStatus('offline', 'Server offline');
   }

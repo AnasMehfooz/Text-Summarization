@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+env
+.vscode
+__pycache__
+*.pyc
+results
+tests
+*.csv
+*.ipynb
+.ipynb_checkpoints
