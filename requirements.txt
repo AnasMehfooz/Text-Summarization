@@ -7,3 +7,4 @@ flask>=3.0.0
 flask-cors>=4.0.0
 waitress>=2.1.0
 accelerate>=0.25.0
+rouge-score>=0.1.2

@@ -1,0 +1,24 @@
+{
+  "dataset": "samsum-test.csv",
+  "num_dialogues": 819,
+  "generation": {
+    "max_length": 150,
+    "num_beams": 4,
+    "early_stopping": true,
+    "no_repeat_ngram_size": 3
+  },
+  "models": {
+    "t5-small (no fine-tuning)": {
+      "rouge1": 28.37,
+      "rouge2": 7.6,
+      "rougeL": 21.98,
+      "seconds": 195.5
+    },
+    "t5-small fine-tuned on SAMSum (this repo)": {
+      "rouge1": 43.39,
+      "rouge2": 18.6,
+      "rougeL": 35.16,
+      "seconds": 151.5
+    }
+  }
+}

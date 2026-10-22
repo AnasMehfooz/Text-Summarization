@@ -32,7 +32,11 @@ Text-Summarization/
 │   └── script.js             # Async API client for UI
 ├── templates/
 │   └── index.html            # Web dashboard
+├── eval/
+│   ├── rouge_scores.json     # ROUGE results on the SAMSum test set
+│   └── test_predictions.csv  # Every test dialogue with reference and model summaries
 ├── app.py                    # Flask server + Waitress WSGI runner
+├── evaluate_model.py         # ROUGE evaluation vs. the base t5-small model
 ├── train.py                  # Fine-tuning script with HuggingFace Trainer
 ├── he.py                     # Training script (original)
 ├── text_summarizer.ipynb     # Interactive Jupyter notebook walkthrough
@@ -116,6 +120,26 @@ The trained weights and tokenizer will be saved to `./saved_summary_model/`.
     "summary": "hannah and amanda will meet at a cafe at 4pm to prepare their presentation."
   }
   ```
+
+---
+
+## 📈 Results
+
+Evaluated on the full SAMSum **test set (819 dialogues)** with the same generation settings the app uses (beam search, 4 beams). Scores are ROUGE F1 (×100) with stemming.
+
+| Model | ROUGE-1 | ROUGE-2 | ROUGE-L |
+|---|---:|---:|---:|
+| t5-small, no fine-tuning (`summarize:` prefix) | 28.37 | 7.60 | 21.98 |
+| **t5-small fine-tuned on SAMSum (this repo)** | **43.39** | **18.60** | **35.16** |
+
+Fine-tuning on 4,000 training dialogues (6 epochs) improves ROUGE-1 by **+15.0** and more than doubles ROUGE-2 over the base model.
+
+**Limitations:** the model is small and was trained on about a quarter of the training set. It sometimes attributes an action to the wrong speaker, and it tends to copy sentences when the input is not a chat. Every prediction is saved in [`eval/test_predictions.csv`](eval/test_predictions.csv) for error analysis.
+
+To reproduce:
+```bash
+python evaluate_model.py
+```
 
 ---
 
