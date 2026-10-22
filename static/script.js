@@ -3,24 +3,54 @@ const inputText      = document.getElementById('inputText');
 const summarizeBtn   = document.getElementById('summarizeBtn');
 const clearBtn       = document.getElementById('clearBtn');
 const copyBtn        = document.getElementById('copyBtn');
+const copyLabel      = document.getElementById('copyLabel');
+const retryBtn       = document.getElementById('retryBtn');
 const charCount      = document.getElementById('charCount');
+const formatHint     = document.getElementById('formatHint');
+const shortcutHint   = document.getElementById('shortcutHint');
+const statusEl       = document.getElementById('status');
+const statusText     = document.getElementById('statusText');
 
 const outputPlaceholder = document.getElementById('outputPlaceholder');
 const outputLoading     = document.getElementById('outputLoading');
 const outputResult      = document.getElementById('outputResult');
 const outputError       = document.getElementById('outputError');
 const summaryText       = document.getElementById('summaryText');
+const errorTitle        = document.getElementById('errorTitle');
 const errorText         = document.getElementById('errorText');
 const statsBar          = document.getElementById('statsBar');
 const statWords         = document.getElementById('statWords');
 const statSumWords      = document.getElementById('statSumWords');
 const statRatio         = document.getElementById('statRatio');
+const statTime          = document.getElementById('statTime');
+
+// ── Examples ──────────────────────────────────────────────────────────────
+const EXAMPLES = {
+  hike: `Maya: Are we still on for the hike on Saturday?
+Leo: Yes! But can we start a bit later, like 10?
+Maya: Sure. I'll bring sandwiches and water.
+Leo: Great, I'll drive. I'll pick you up at 9:30.`,
+  keys: `Sam: Have you seen my car keys? I can't find them anywhere.
+Priya: Did you check the jacket you wore yesterday?
+Sam: Not there either...
+Priya: Maybe you left them at the gym?
+Sam: Oh no, probably. I'll call them right now.`,
+  gift: `Nora: It's Dad's birthday on Friday and I still have no gift.
+Omar: He keeps talking about that new coffee grinder.
+Nora: Good idea! Want to split it?
+Omar: Sure, send me the link and I'll pay half.`,
+};
 
 // ── State ─────────────────────────────────────────────────────────────────
 let currentSummary = '';
+let isLoading = false;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 const wordCount = (str) => str.trim().split(/\s+/).filter(Boolean).length;
+
+// A chat is at least two "Name: message" lines.
+const looksLikeDialogue = (str) =>
+  (str.match(/^\s*[^:\n]{1,40}:\s*\S/gm) || []).length >= 2;
 
 function showState(state) {
   outputPlaceholder.hidden = state !== 'idle';
@@ -29,40 +59,95 @@ function showState(state) {
   outputError.hidden       = state !== 'error';
 }
 
-function updateCharCount() {
-  const n = inputText.value.length;
-  charCount.textContent = `${n.toLocaleString()} character${n !== 1 ? 's' : ''}`;
+function updateInputState() {
+  const text  = inputText.value;
+  const words = wordCount(text);
+  const chars = text.length;
+  charCount.textContent = chars
+    ? `${words.toLocaleString()} word${words !== 1 ? 's' : ''} · ${chars.toLocaleString()} characters`
+    : '0 words';
+
+  const hasText = text.trim().length > 0;
+  summarizeBtn.disabled = !hasText || isLoading;
+  clearBtn.disabled     = !hasText;
+  formatHint.hidden     = text.trim().length < 40 || looksLikeDialogue(text);
+}
+
+function setStatus(state, label) {
+  statusEl.dataset.state = state;
+  statusText.textContent = label;
+}
+
+// The model returns all-lowercase text. Restore casing for names and other
+// words that are capitalised mid-sentence in the input, then sentence-case it.
+function restoreCase(summary, source) {
+  const forms = new Map();   // lowercase word → { form: count }
+  const bump = (word) => {
+    const key = word.toLowerCase();
+    const counts = forms.get(key) || {};
+    counts[word] = (counts[word] || 0) + 1;
+    forms.set(key, counts);
+  };
+
+  for (const m of source.matchAll(/[A-Za-z]+/g)) {
+    const before = source.slice(0, m.index).trimEnd();
+    const sentenceStart = before === '' || /[.!?:\n]$/.test(before);
+    if (!sentenceStart) bump(m[0]);
+  }
+  // Speaker labels ("Hannah:") are names even though they start a line.
+  for (const m of source.matchAll(/^\s*([^:\n]{1,40}):/gm)) {
+    for (const w of m[1].match(/[A-Za-z]+/g) || []) bump(w);
+  }
+
+  const best = new Map();
+  for (const [key, counts] of forms) {
+    const [form] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (form !== key) best.set(key, form);
+  }
+
+  return summary
+    .replace(/[A-Za-z]+/g, (w) => (w === 'i' ? 'I' : best.get(w) || w))
+    .replace(/(^\s*|[.!?]\s+)([a-z])/g, (m, pre, ch, offset, str) =>
+      // Skip abbreviations like "a.m." or "p.m."
+      /(^|[^A-Za-z])[A-Za-z]\.$/.test(str.slice(0, offset + 1)) ? m : pre + ch.toUpperCase());
 }
 
 // ── Summarise ──────────────────────────────────────────────────────────────
 async function summarize() {
   const text = inputText.value.trim();
-  if (!text) {
-    showError('Please enter some text before summarising.');
-    return;
-  }
+  if (!text || isLoading) return;
 
   // UI: loading
+  isLoading = true;
   showState('loading');
   summarizeBtn.classList.add('loading');
-  summarizeBtn.disabled = true;
+  updateInputState();
   copyBtn.disabled = true;
   statsBar.hidden = true;
 
+  const started = performance.now();
   try {
-    const resp = await fetch('/summarize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      throw new Error(data.error || `Server error ${resp.status}`);
+    let resp;
+    try {
+      resp = await fetch('/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+    } catch {
+      setStatus('offline', 'Server offline');
+      showError("Can't reach the server", 'Start it with "python app.py" in the project folder, then try again.');
+      return;
     }
 
-    currentSummary = data.summary;
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      showError('Summarization failed', data.error || `The server responded with error ${resp.status}.`);
+      return;
+    }
+
+    const seconds = (performance.now() - started) / 1000;
+    currentSummary = restoreCase(data.summary, text);
     summaryText.textContent = currentSummary;
     showState('result');
     copyBtn.disabled = false;
@@ -71,23 +156,35 @@ async function summarize() {
     const inWords  = wordCount(text);
     const outWords = wordCount(currentSummary);
     const ratio    = inWords > 0 ? Math.round((1 - outWords / inWords) * 100) : 0;
-    statWords.textContent    = `${inWords.toLocaleString()} words`;
-    statSumWords.textContent = `${outWords.toLocaleString()} words`;
-    statRatio.textContent    = `${ratio}% shorter`;
+    statWords.textContent    = inWords.toLocaleString();
+    statSumWords.textContent = outWords.toLocaleString();
+    statRatio.textContent    = ratio >= 0 ? `${ratio}% shorter` : 'Longer than input';
+    statTime.textContent     = `${seconds.toFixed(1)}s`;
     statsBar.hidden = false;
-
-  } catch (err) {
-    showError(err.message || 'Something went wrong. Is the server running?');
   } finally {
+    isLoading = false;
     summarizeBtn.classList.remove('loading');
-    summarizeBtn.disabled = false;
+    updateInputState();
   }
 }
 
-function showError(msg) {
-  errorText.textContent = msg;
+function showError(title, msg) {
+  errorTitle.textContent = title;
+  errorText.textContent  = msg;
   showState('error');
   statsBar.hidden = true;
+}
+
+// ── Health ────────────────────────────────────────────────────────────────
+async function checkHealth() {
+  try {
+    const resp = await fetch('/health', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error();
+    setStatus('ready', `Ready · ${data.device === 'cuda' ? 'GPU' : 'CPU'}`);
+  } catch {
+    setStatus('offline', 'Server offline');
+  }
 }
 
 // ── Copy ──────────────────────────────────────────────────────────────────
@@ -95,21 +192,12 @@ async function copySummary() {
   if (!currentSummary) return;
   try {
     await navigator.clipboard.writeText(currentSummary);
-    copyBtn.innerHTML = `
-      <svg viewBox="0 0 20 20" fill="currentColor">
-        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
-      </svg>`;
-    copyBtn.style.borderColor = '#22c55e';
-    copyBtn.style.color = '#22c55e';
+    copyBtn.classList.add('copied');
+    copyLabel.textContent = 'Copied';
     setTimeout(() => {
-      copyBtn.innerHTML = `
-        <svg viewBox="0 0 20 20" fill="currentColor">
-          <path d="M8 2a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H8zM6 4a2 2 0 012-2h2.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V14a2 2 0 01-2 2H8a2 2 0 01-2-2V4z"/>
-          <path d="M4 6a2 2 0 00-2 2v8a2 2 0 002 2h6a2 2 0 002-2v-1H8a4 4 0 01-4-4V6z"/>
-        </svg>`;
-      copyBtn.style.borderColor = '';
-      copyBtn.style.color = '';
-    }, 2000);
+      copyBtn.classList.remove('copied');
+      copyLabel.textContent = 'Copy';
+    }, 1800);
   } catch {
     // fallback — select text
     const range = document.createRange();
@@ -122,26 +210,40 @@ async function copySummary() {
 // ── Clear ─────────────────────────────────────────────────────────────────
 function clearInput() {
   inputText.value = '';
-  updateCharCount();
   currentSummary = '';
   copyBtn.disabled = true;
   statsBar.hidden = true;
   showState('idle');
+  updateInputState();
   inputText.focus();
 }
 
 // ── Events ────────────────────────────────────────────────────────────────
 summarizeBtn.addEventListener('click', summarize);
+retryBtn.addEventListener('click', () => { checkHealth(); summarize(); });
 clearBtn.addEventListener('click', clearInput);
 copyBtn.addEventListener('click', copySummary);
 
-inputText.addEventListener('input', updateCharCount);
+inputText.addEventListener('input', updateInputState);
+
+document.querySelectorAll('[data-example]').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    inputText.value = EXAMPLES[chip.dataset.example];
+    updateInputState();
+    summarize();
+  });
+});
 
 // Keyboard shortcut: Ctrl/Cmd + Enter
 inputText.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') summarize();
 });
 
+window.addEventListener('focus', checkHealth);
+
 // ── Init ──────────────────────────────────────────────────────────────────
-updateCharCount();
+if (/Mac|iPhone|iPad/.test(navigator.platform)) shortcutHint.textContent = '⌘ ↵';
+updateInputState();
 showState('idle');
+checkHealth();
+setInterval(checkHealth, 15000);
