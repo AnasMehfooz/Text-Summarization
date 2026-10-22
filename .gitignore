@@ -8,3 +8,6 @@ results/
 venv/
 env/
 .env
+
+# Editor settings
+.vscode/

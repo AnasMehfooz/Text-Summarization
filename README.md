@@ -139,7 +139,7 @@ pytest
 ├── api.py                  FastAPI server
 ├── app.py                  Flask server (Waitress)
 ├── summarizer.py           Shared preprocessing and inference
-├── train.py                Fine-tuning script (he.py: original version)
+├── train.py                Fine-tuning script
 ├── evaluate_model.py       ROUGE evaluation vs. the base t5-small model
 ├── eval/                   Test-set scores and per-dialogue predictions
 ├── text_summarizer.ipynb   Notebook walkthrough
@@ -150,6 +150,12 @@ pytest
 └── samsum-*.csv            Dataset splits
 ```
 
+## License
+
+Code: MIT, see [LICENSE](LICENSE). The fine-tuned weights are derived from [t5-small](https://huggingface.co/google-t5/t5-small) (Apache 2.0). The [SAMSum](https://huggingface.co/datasets/samsum) dataset is licensed CC BY-NC-ND 4.0.
+
 ## Author
 
 **Anas Mehfooz** · [GitHub](https://github.com/AnasMehfooz) · [LinkedIn](https://www.linkedin.com/in/anas-mehfooz-670501302/)
+
+The FastAPI server, Docker setup and CI were built with AI pair programming (Claude).
