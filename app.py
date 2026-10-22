@@ -46,8 +46,11 @@ def health():
 @app.route("/summarize", methods=["POST"])
 def summarize():
     data = request.get_json(silent=True)
-    if not data or "text" not in data:
+    if not isinstance(data, dict) or "text" not in data:
         return jsonify({"error": "Please provide a 'text' field in the request body."}), 400
+
+    if not isinstance(data["text"], str):
+        return jsonify({"error": "The 'text' field must be a string."}), 400
 
     raw_text = data["text"].strip()
     if not raw_text:
